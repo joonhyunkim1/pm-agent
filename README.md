@@ -52,7 +52,7 @@ pm schedule install
 pm/
   manifest.py      프로젝트별 목표·정책·체크 정의 (pydantic)
   discovery.py     폴더를 보고 매니페스트 초안 생성 (규칙 기반)
-  checks/          git · npm · python · gh_workflow · http_json · gh_deployment · verify · llm_models
+  checks/          git · hygiene · npm · python · gh_workflow · http_json · gh_deployment · verify · llm_models
   scanner.py       체크 실행 → Finding 갱신 → 알림 / tick(스케줄러 진입점)
   store.py         SQLite: 스캔 이력, Finding 수명주기, append-only 이벤트
   notify/          즉시 알림(critical만) + 일일 요약
@@ -69,7 +69,7 @@ web/               React + Vite 대시보드 (나중에 Tauri로 감싸기 쉬�
 | 종류 | 주기 | 체크 |
 |---|---|---|
 | 헬스 스캔 | 매시간 (tick마다) | 예약 워크플로우 성공률, HTTP 헬스 엔드포인트, 배포 연속 실패 |
-| 전체 스캔 | 6시간 (`scan_interval_hours`) | 위 항목 + git 상태, 의존성·취약점, 테스트·빌드, LLM 모델 목록 |
+| 전체 스캔 | 6시간 (`scan_interval_hours`) | 위 항목 + git 상태, 비밀값 위생, 의존성·취약점, 테스트·빌드, LLM 모델 목록 |
 
 서비스 장애는 가볍고 급한 헬스 체크로 1시간 안에 잡고, 느리고 급하지 않은 점검은 전체 스캔에 모았다.
 노트북이 잠들어 있어도 다음 tick에서 밀린 스캔을 따라잡는다.

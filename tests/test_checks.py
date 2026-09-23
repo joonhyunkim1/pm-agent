@@ -82,3 +82,23 @@ def test_only_ops_checks_are_light():
     })
     light = sorted(c.id for c in build_checks(m) if c.light)
     assert light == ["deploy:Production", "gh:a.yml", "http:h"]
+
+
+def test_tracked_secret_files():
+    from pm.checks.hygiene import tracked_secret_files
+
+    files = [".env", ".env.example", "app/.env.local", "src/main.py", "certs/server.pem", "config/.env.sample"]
+    assert tracked_secret_files(files) == [".env", "app/.env.local", "certs/server.pem"]
+
+
+def test_vercelignore_rules(tmp_path):
+    from pm.checks.hygiene import ignores_env, vercel_findings
+
+    assert vercel_findings(tmp_path) == []  # Vercel 연결 없음
+    (tmp_path / ".vercel").mkdir()
+    assert [f.key for f in vercel_findings(tmp_path)] == ["vercelignore_missing"]
+    (tmp_path / ".vercelignore").write_text("/exports\nnode_modules\n")
+    assert [f.key for f in vercel_findings(tmp_path)] == ["vercelignore_no_env"]
+    (tmp_path / ".vercelignore").write_text("# 설명\n.env*\n/exports\n")
+    assert vercel_findings(tmp_path) == []
+    assert ignores_env("/.env") and ignores_env("*.env") and not ignores_env("!.env\n.env.local")

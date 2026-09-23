@@ -62,6 +62,8 @@ export function checkLabel(id: string): string {
   switch (kind) {
     case 'git':
       return 'Git'
+    case 'hygiene':
+      return '비밀값 위생'
     case 'npm':
       return 'npm 의존성'
     case 'python':

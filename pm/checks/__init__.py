@@ -5,6 +5,7 @@ from ..manifest import GhDeploymentCheck, GhWorkflowCheck, HttpJsonCheck, Manife
 from .base import Check, Context, Finding, Outcome
 from .deps import NpmCheck, PythonDepsCheck
 from .git import GitCheck
+from .hygiene import HygieneCheck
 from .llm_models import LlmModelsCheck
 from .ops import GhDeployment, GhWorkflow, HttpJson
 from .verify import Verify
@@ -13,7 +14,7 @@ __all__ = ["Check", "Context", "Finding", "Outcome", "build_checks"]
 
 
 def build_checks(m: Manifest) -> list[Check]:
-    checks: list[Check] = [GitCheck()]
+    checks: list[Check] = [GitCheck(), HygieneCheck()]
     if "node" in m.stack:
         checks.append(NpmCheck())
     if "python" in m.stack:
