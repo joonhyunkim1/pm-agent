@@ -30,15 +30,15 @@ class ScanBusy(Exception):
 
 
 @contextmanager
-def scan_lock():
-    f = paths.lock_file()
+def scan_lock(name: str = "scan"):
+    f = paths.lock_file(name)
     f.parent.mkdir(parents=True, exist_ok=True)
     if f.exists() and time.time() - f.stat().st_mtime > LOCK_STALE_SEC:
         f.unlink(missing_ok=True)
     try:
         fd = os.open(f, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     except FileExistsError:
-        raise ScanBusy("다른 스캔이 진행 중이다") from None
+        raise ScanBusy(f"다른 작업({name})이 진행 중이다") from None
     try:
         os.write(fd, f"{os.getpid()} {now_iso()}".encode())
         os.close(fd)
@@ -47,8 +47,8 @@ def scan_lock():
         f.unlink(missing_ok=True)
 
 
-def is_scanning() -> bool:
-    f = paths.lock_file()
+def is_scanning(name: str = "scan") -> bool:
+    f = paths.lock_file(name)
     return f.exists() and time.time() - f.stat().st_mtime <= LOCK_STALE_SEC
 
 
@@ -164,6 +164,21 @@ def tick(log: Log = print) -> None:
         log(f"{'전체' if due else '헬스'} 스캔 완료: run #{r['run_id']}, 알림 {r['alerts_sent']}건")
     except ScanBusy:
         log("다른 스캔이 진행 중이라 건너뜀")
+
+    # 제안(P1): 주기가 됐고 키가 있으면, 변화가 있는 프로젝트만 LLM에 보낸다
+    from . import llm, planner
+
+    with Store() as st:
+        due_plan = planner.plan_due(st, cfg)
+    if due_plan and llm.configured():
+        try:
+            r = planner.plan("schedule", log=log)
+            log(f"계획 완료: 새 제안 {sum(r['created'].values())}개, 비용 ${r['cost_usd']:.4f}, "
+                f"이번 달 ${r['month_spend']:.2f}")
+        except ScanBusy:
+            log("다른 계획이 진행 중이라 건너뜀")
+        except Exception as e:
+            log(f"계획 실패: {type(e).__name__}: {e}")
     with Store() as st:
         manifests, _ = mf.load_all()
         try:

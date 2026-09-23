@@ -38,8 +38,12 @@ def logs_dir() -> Path:
     return home() / "logs"
 
 
-def lock_file() -> Path:
-    return home() / "scan.lock"
+def tasks_dir() -> Path:
+    return home() / "tasks"
+
+
+def lock_file(name: str = "scan") -> Path:
+    return home() / f"{name}.lock"
 
 
 def nfc(s: str) -> str:

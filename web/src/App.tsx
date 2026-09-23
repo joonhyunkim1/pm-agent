@@ -3,10 +3,11 @@ import { api, type Overview } from './api'
 import { Board } from './Board'
 import { Inbox } from './Inbox'
 import { ProjectPanel } from './ProjectPanel'
+import { Proposals } from './Proposals'
 import { Runs } from './Runs'
-import { timeAgo } from './util'
+import { timeAgo, usd } from './util'
 
-type Tab = 'board' | 'inbox' | 'runs'
+type Tab = 'board' | 'proposals' | 'inbox' | 'runs'
 interface Route {
   tab: Tab
   project?: string
@@ -15,7 +16,7 @@ interface Route {
 // #/board, #/inbox, #/runs 뒤에 /p/<id>가 붙으면 프로젝트 패널을 연다
 function parseHash(): Route {
   const [tab, p, id] = location.hash.replace(/^#\/?/, '').split('/')
-  const t: Tab = tab === 'inbox' || tab === 'runs' ? tab : 'board'
+  const t: Tab = tab === 'inbox' || tab === 'runs' || tab === 'proposals' ? tab : 'board'
   return { tab: t, project: p === 'p' && id ? decodeURIComponent(id) : undefined }
 }
 
@@ -25,6 +26,7 @@ function toHash(r: Route): string {
 
 const TABS: { v: Tab; label: string }[] = [
   { v: 'board', label: '보드' },
+  { v: 'proposals', label: '제안' },
   { v: 'inbox', label: '알림함' },
   { v: 'runs', label: '스캔 이력' },
 ]
@@ -58,11 +60,12 @@ export function App() {
     load()
   }, [load])
 
-  // 스캔 중에는 자주, 평소에는 30초마다 새로 고친다
+  // 스캔·계획 중에는 자주, 평소에는 30초마다 새로 고친다
+  const busy = ov?.scanning || ov?.llm.planning
   useEffect(() => {
-    const t = setInterval(load, ov?.scanning ? 1500 : 30000)
+    const t = setInterval(load, busy ? 1500 : 30000)
     return () => clearInterval(t)
-  }, [load, ov?.scanning])
+  }, [load, busy])
 
   const changed = useCallback(() => {
     setBump((b) => b + 1)
@@ -79,7 +82,7 @@ export function App() {
   }
 
   // 스캔이 끝나 last_run이 바뀌면 하위 화면도 새로 불러온다
-  const refreshKey = bump * 100000 + (ov?.last_run?.id ?? 0)
+  const refreshKey = bump * 100000 + (ov?.last_run?.id ?? 0) + (ov?.llm.planning ? 0.5 : 0) + (ov?.proposals_waiting ?? 0) * 1000
   const projects = ov?.projects ?? []
   const red = projects.filter((p) => p.health === 'red').length
   const yellow = projects.filter((p) => p.health === 'yellow').length
@@ -96,9 +99,11 @@ export function App() {
             <i />
           </span>
           <span className="brand-name">PM Agent</span>
-          <span className="mode" title="P0: 관찰만 한다. LLM을 호출하지 않으므로 비용이 들지 않는다.">
-            관찰 모드 · LLM 비용 0원
-          </span>
+          {ov && (
+            <span className="mode" title={`${ov.llm.planner_model} · 가격표 ${ov.llm.pricing.as_of} ${ov.llm.pricing.tier}`}>
+              이번 달 LLM {usd(ov.llm.month_spend)} / {usd(ov.llm.budget, 0)}
+            </span>
+          )}
         </div>
         <nav className="tabs" aria-label="화면">
           {TABS.map((t) => (
@@ -110,6 +115,9 @@ export function App() {
             >
               {t.label}
               {t.v === 'inbox' && unacked > 0 && <span className="tab-badge">{unacked}</span>}
+              {t.v === 'proposals' && (ov?.proposals_waiting ?? 0) > 0 && (
+                <span className="tab-badge tab-badge-accent">{ov?.proposals_waiting}</span>
+              )}
             </button>
           ))}
         </nav>
@@ -144,6 +152,9 @@ export function App() {
             </div>
             <Setup ov={ov} />
             {route.tab === 'board' && <Board ov={ov} onOpen={(id) => go({ ...route, project: id })} onChanged={changed} />}
+            {route.tab === 'proposals' && (
+              <Proposals ov={ov} refreshKey={refreshKey} onOpen={(id) => go({ ...route, project: id })} onChanged={changed} />
+            )}
             {route.tab === 'inbox' && (
               <Inbox ov={ov} refreshKey={refreshKey} onOpen={(id) => go({ ...route, project: id })} onChanged={changed} />
             )}
@@ -196,6 +207,24 @@ function Setup({ ov }: { ov: Overview }) {
       text: (
         <>
           Telegram 알림 미연결 — <code>pm secret set TELEGRAM_BOT_TOKEN</code> 후 <code>pm telegram link</code>
+        </>
+      ),
+    })
+  if (!ov.llm.configured)
+    items.push({
+      key: 'llm',
+      text: (
+        <>
+          OpenAI 키 미설정 (제안 기능 꺼짐) — <code>pm secret set OPENAI_API_KEY</code>
+        </>
+      ),
+    })
+  if (ov.schedule.installed && ov.schedule.bot && !ov.schedule.bot.installed)
+    items.push({
+      key: 'bot',
+      text: (
+        <>
+          Telegram 승인 봇 꺼짐 — <code>pm schedule install</code>로 다시 등록
         </>
       ),
     })

@@ -14,6 +14,7 @@ from ..store import parse_iso
 from .base import Check, Context, Finding, Outcome
 
 _TS_PREFIX = re.compile(r"^\d{4}-\d{2}-\d{2}T[\d:.]+Z\s?")
+_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 _ERR = re.compile(r"(Error|Exception|error:|FAILED|Traceback|fatal:)")
 
 
@@ -190,7 +191,7 @@ def _error_hint(ctx: Context, gh: str, repo: str, run_id: int) -> str:
     r = proc.run([gh, "run", "view", str(run_id), "-R", repo, "--log-failed"], timeout=60)
     msgs = []
     for ln in r.out.splitlines():
-        msg = _TS_PREFIX.sub("", ln.split("\t")[-1]).strip()
+        msg = _ANSI.sub("", _TS_PREFIX.sub("", ln.split("\t")[-1])).strip()
         if (_ERR.search(msg) and "Process completed with exit code" not in msg
                 and not msg.startswith(("raise ", "File \"", "Traceback"))):
             msgs.append(msg)

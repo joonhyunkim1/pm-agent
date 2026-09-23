@@ -74,7 +74,46 @@ CREATE TABLE IF NOT EXISTS kv (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS llm_calls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    purpose TEXT NOT NULL,
+    project_id TEXT,
+    model TEXT NOT NULL,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    cached_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_usd REAL NOT NULL DEFAULT 0,
+    ok INTEGER NOT NULL,
+    error TEXT,
+    response_id TEXT,
+    duration_ms INTEGER,
+    tier TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_llm_calls_ts ON llm_calls(ts);
+CREATE TABLE IF NOT EXISTS proposals (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    status TEXT NOT NULL,
+    title TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    priority INTEGER NOT NULL,
+    data_json TEXT NOT NULL,
+    decided_at TEXT,
+    decided_via TEXT,
+    decision_note TEXT,
+    tg_message_id INTEGER
+);
+CREATE INDEX IF NOT EXISTS ix_proposals_status ON proposals(status, project_id);
 """
+
+# 제안 상태: proposed(승인함) · backlog(한도 초과로 대기) · deferred(보류) → approved · rejected
+# approved → done은 P2 실행기가 쓴다.
+PROPOSAL_OPEN = ("proposed", "backlog", "deferred")
+PROPOSAL_DECISIONS = {"approved", "rejected", "deferred", "proposed"}
 
 _SEV_ORDER_SQL = "CASE severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END"
 
@@ -99,6 +138,14 @@ class Store:
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(_SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """이미 만들어진 DB에 나중에 추가한 열을 붙인다."""
+        cols = {r["name"] for r in self.db.execute("PRAGMA table_info(llm_calls)")}
+        if "tier" not in cols:
+            with self.db:
+                self.db.execute("ALTER TABLE llm_calls ADD COLUMN tier TEXT")
 
     def close(self) -> None:
         self.db.close()
@@ -346,6 +393,79 @@ class Store:
             self.db.execute("UPDATE ideas SET status='archived' WHERE id=?", (idea_id,))
             self._event("idea_archived", None, idea_id=idea_id)
 
+    # ---- LLM 비용 원장 ----
+    def add_llm_call(self, *, purpose: str, project_id: str | None, model: str, usage: dict,
+                     cost_usd: float, ok: bool, error: str | None = None,
+                     response_id: str | None = None, duration_ms: int = 0, tier: str | None = None) -> None:
+        with self.db:
+            self.db.execute(
+                "INSERT INTO llm_calls(ts, purpose, project_id, model, input_tokens, cached_tokens,"
+                " cache_write_tokens, output_tokens, reasoning_tokens, cost_usd, ok, error, response_id,"
+                " duration_ms, tier) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (now_iso(), purpose, project_id, model, usage.get("input", 0), usage.get("cached", 0),
+                 usage.get("cache_write", 0), usage.get("output", 0), usage.get("reasoning", 0),
+                 cost_usd, int(ok), error, response_id, duration_ms, tier),
+            )
+
+    def month_spend(self) -> float:
+        """이번 달(UTC, OpenAI 청구 기준) LLM 비용 합계."""
+        start = datetime.now(timezone.utc).strftime("%Y-%m-01")
+        r = self.db.execute("SELECT COALESCE(SUM(cost_usd), 0) AS s FROM llm_calls WHERE ts >= ?", (start,))
+        return float(r.fetchone()["s"])
+
+    def llm_calls(self, limit: int = 50) -> list[dict]:
+        rows = self.db.execute("SELECT * FROM llm_calls ORDER BY id DESC LIMIT ?", (limit,))
+        return [dict(r) for r in rows]
+
+    # ---- 제안 ----
+    def add_proposal(self, pid: str, project_id: str, status: str, data: dict) -> None:
+        with self.db:
+            self.db.execute(
+                "INSERT INTO proposals(id, project_id, created_at, status, title, kind, priority, data_json)"
+                " VALUES (?,?,?,?,?,?,?,?)",
+                (pid, project_id, now_iso(), status, data["title"], data["kind"], data["priority"],
+                 json.dumps(data, ensure_ascii=False)),
+            )
+            self._event("proposal_created", project_id, proposal_id=pid, title=data["title"], status=status)
+
+    def proposals(self, project_id: str | None = None,
+                  statuses: tuple[str, ...] | None = None, limit: int = 200) -> list[dict]:
+        sql = "SELECT * FROM proposals WHERE 1=1"
+        args: list[Any] = []
+        if project_id:
+            sql += " AND project_id=?"
+            args.append(project_id)
+        if statuses:
+            sql += f" AND status IN ({','.join('?' * len(statuses))})"
+            args.extend(statuses)
+        sql += " ORDER BY created_at DESC, priority LIMIT ?"
+        args.append(limit)
+        return [_proposal_dict(r) for r in self.db.execute(sql, args)]
+
+    def proposal(self, pid: str) -> dict | None:
+        r = self.db.execute("SELECT * FROM proposals WHERE id=?", (pid,)).fetchone()
+        return _proposal_dict(r) if r else None
+
+    def decide_proposal(self, pid: str, status: str, via: str, note: str = "") -> dict | None:
+        """승인·거절·보류. 이미 결정된(approved/rejected/done) 제안은 바꾸지 않는다."""
+        if status not in PROPOSAL_DECISIONS:
+            raise ValueError(status)
+        p = self.proposal(pid)
+        if not p or p["status"] not in PROPOSAL_OPEN:
+            return None
+        with self.db:
+            self.db.execute(
+                "UPDATE proposals SET status=?, decided_at=?, decided_via=?, decision_note=? WHERE id=?",
+                (status, now_iso(), via, note or None, pid),
+            )
+            self._event(f"proposal_{status}", p["project_id"], proposal_id=pid, title=p["title"], via=via,
+                        note=note)
+        return self.proposal(pid)
+
+    def set_proposal_message(self, pid: str, message_id: int) -> None:
+        with self.db:
+            self.db.execute("UPDATE proposals SET tg_message_id=? WHERE id=?", (message_id, pid))
+
     # ---- KV ----
     def get_kv(self, key: str, default: Any = None) -> Any:
         r = self.db.execute("SELECT value FROM kv WHERE key=?", (key,)).fetchone()
@@ -358,6 +478,12 @@ class Store:
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                 (key, json.dumps(value, ensure_ascii=False, default=str)),
             )
+
+
+def _proposal_dict(r: sqlite3.Row) -> dict:
+    d = dict(r)
+    d["data"] = json.loads(d.pop("data_json") or "{}")
+    return d
 
 
 def _run_dict(r: sqlite3.Row) -> dict:

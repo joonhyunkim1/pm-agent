@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { api, type Finding, type FindingStatus, type ProjectDetail } from './api'
 import { AutonomyBadge, FindingItem, HealthDot, RunDots } from './components'
+import { ProposalCard, TaskModal } from './Proposals'
+import type { Proposal } from './api'
 import { AUTONOMY, CSTATUS, STAGE, VERIFY, clock, eventLabel, timeAgo } from './util'
 
 export function ProjectPanel({
@@ -17,6 +19,7 @@ export function ProjectPanel({
   const [d, setD] = useState<ProjectDetail | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [showResolved, setShowResolved] = useState(false)
+  const [task, setTask] = useState<{ p: Proposal; md: string; approved: boolean } | null>(null)
 
   useEffect(() => {
     let alive = true
@@ -38,6 +41,16 @@ export function ProjectPanel({
   async function act(f: Finding, status: FindingStatus) {
     await api.setFinding(f.fingerprint, status)
     onChanged()
+  }
+
+  async function decide(p: Proposal, action: 'approve' | 'reject' | 'defer', note = '') {
+    await api.decide(p.id, action, note)
+    onChanged()
+  }
+
+  async function openTask(p: Proposal) {
+    const t = await api.task(p.id)
+    setTask({ p, md: t.markdown, approved: t.approved })
   }
 
   const p = d?.project
@@ -119,6 +132,17 @@ export function ProjectPanel({
                 others.map((f) => <FindingItem key={f.fingerprint} f={f} onAction={act} />)}
             </section>
 
+            {d.proposals.length > 0 && (
+              <section className="panel-sec">
+                <h3>
+                  제안 <span className="sec-count">{d.proposals.length}</span>
+                </h3>
+                {d.proposals.map((p) => (
+                  <ProposalCard key={p.id} p={p} onAct={decide} onTask={() => openTask(p)} compact />
+                ))}
+              </section>
+            )}
+
             <section className="panel-sec">
               <h3>체크 결과</h3>
               <div className="checks">
@@ -183,6 +207,7 @@ export function ProjectPanel({
           </div>
         )}
       </aside>
+      {task && <TaskModal {...task} onClose={() => setTask(null)} />}
     </div>
   )
 }

@@ -102,3 +102,13 @@ def test_vercelignore_rules(tmp_path):
     (tmp_path / ".vercelignore").write_text("# 설명\n.env*\n/exports\n")
     assert vercel_findings(tmp_path) == []
     assert ignores_env("/.env") and ignores_env("*.env") and not ignores_env("!.env\n.env.local")
+
+
+def test_secret_format_catches_pasted_key_name():
+    from pm.secrets import format_problem
+
+    assert format_problem("OPENAI_API_KEY", "pm-manager key") is not None
+    assert format_problem("OPENAI_API_KEY", "sk-proj-" + "a" * 60) is None
+    assert format_problem("TELEGRAM_BOT_TOKEN", "123456789:" + "A" * 35) is None
+    assert format_problem("TELEGRAM_CHAT_ID", "abc") is not None
+    assert format_problem("DR_SITE_URL", "https://x.vercel.app") is None  # 형식 규칙 없는 이름

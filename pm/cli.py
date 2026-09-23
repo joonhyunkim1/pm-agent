@@ -8,7 +8,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from . import discovery, notify, paths, scanner, schedule, secrets
+from . import discovery, llm, notify, paths, planner, pricing, proposals, scanner, schedule, secrets
 from . import manifest as mf
 from .config import load_config
 from .notify import telegram
@@ -155,13 +155,152 @@ def config():
     load_config()
 
 
+# ---- 제안 (P1) ----
+STATUS_KO = {"proposed": "승인 대기", "backlog": "백로그", "deferred": "보류", "approved": "승인",
+             "rejected": "거절", "done": "완료"}
+
+
+@app.command()
+def plan(
+    project: list[str] = typer.Option(None, "--project", "-p", help="이 프로젝트만"),
+    force: bool = typer.Option(False, "--force", help="변화가 없어도 호출"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="호출하지 않고 예상 비용만 보기"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="확인 없이 실행"),
+):
+    """LLM으로 개선 제안을 만든다. 실행 전에 예상 비용을 보여준다."""
+    est = planner.estimate(project or None, force)
+    t = Table("프로젝트", "호출", "입력 토큰(추정)", "보통", "최대")
+    for r in est["projects"]:
+        t.add_row(r["name"], "예" if r["will_call"] else "[dim]변화 없음[/]", f"{r['input_tokens']:,}",
+                  f"${r['typical_usd']:.4f}", f"${r['worst_usd']:.4f}")
+    con.print(t)
+    con.print(f"모델 {est['model']} ({est['tier']}) · {est['output_basis']} · "
+              f"예상 ${est['typical_usd']:.4f} (최대 ${est['worst_usd']:.4f}) · "
+              f"이번 달 ${est['month_spend']:.2f} / ${est['budget']:.2f} · "
+              f"가격표 {est['pricing']['as_of']} {est['pricing']['tier']}")
+    if dry_run:
+        return
+    if not any(r["will_call"] for r in est["projects"]):
+        con.print("변화가 있는 프로젝트가 없어 호출하지 않습니다. 강제로 하려면 --force")
+        return
+    if not llm.configured():
+        con.print(f"[red]{llm.KEY} 미설정 — `pm secret set {llm.KEY}`[/]")
+        raise typer.Exit(1)
+    if not yes:
+        typer.confirm(f"예상 ${est['typical_usd']:.4f} (최대 ${est['worst_usd']:.4f}) — 실행할까요?", abort=True)
+    try:
+        r = planner.plan("manual", only=project or None, force=force,
+                         log=lambda s: con.print(s, markup=False, highlight=False))
+    except scanner.ScanBusy as e:
+        con.print(f"[yellow]{e}[/]")
+        raise typer.Exit(1)
+    con.print(f"\n새 제안: 승인함 {r['created']['proposed']}개 · 백로그 {r['created']['backlog']}개 · "
+              f"Telegram {r['notified']}건 · 이번 호출 ${r['cost_usd']:.4f} · 이번 달 ${r['month_spend']:.2f}")
+
+
+@app.command("proposals")
+def proposals_(status: str = typer.Option("open", help="open | proposed | backlog | deferred | approved | rejected | all")):
+    """제안 목록."""
+    statuses = {"open": ("proposed", "deferred", "backlog"), "all": None}.get(status, (status,))
+    names = {m.id: m.name for m in mf.load_all()[0]}
+    with Store() as st:
+        rows = st.proposals(statuses=statuses)
+    t = Table("ID", "프로젝트", "상태", "유형", "규모·위험", "실행 비용", "제목")
+    for p in rows:
+        d = p["data"]
+        c = d["exec_cost"]
+        t.add_row(p["id"], names.get(p["project_id"], p["project_id"]), STATUS_KO.get(p["status"], p["status"]),
+                  notify.KIND.get(d["kind"], d["kind"]), f"{d['size']}·{notify.RISK.get(d['risk'], d['risk'])}",
+                  f"${c['low']:.2f}~{c['high']:.2f}", d["title"])
+    con.print(t)
+
+
+def _decide(pid: str, action: str, note: str) -> None:
+    with Store() as st:
+        p = proposals.decide(st, pid, action, "cli", note)
+    if not p:
+        con.print("[red]없는 제안이거나 이미 결정된 제안입니다.[/]")
+        raise typer.Exit(1)
+    con.print(f"{STATUS_KO[p['status']]}: {p['title']}")
+    if p["status"] == "approved":
+        con.print(f"작업 지시서: {proposals.work_order_path(pid)}  (`pm task {pid}`로 보기)")
+
+
+@app.command()
+def approve(pid: str, note: str = typer.Option("", "--note", "-n")):
+    """제안 승인 → 작업 지시서 생성."""
+    _decide(pid, "approve", note)
+
+
+@app.command()
+def reject(pid: str, note: str = typer.Option("", "--note", "-n", help="거절 사유 (다음 계획에 반영)")):
+    """제안 거절."""
+    _decide(pid, "reject", note)
+
+
+@app.command()
+def defer(pid: str, note: str = typer.Option("", "--note", "-n")):
+    """제안 보류."""
+    _decide(pid, "defer", note)
+
+
+@app.command()
+def task(pid: str):
+    """작업 지시서 출력. 코딩 에이전트에 그대로 붙여넣어 쓸 수 있다."""
+    with Store() as st:
+        p = st.proposal(pid)
+    if not p:
+        con.print("[red]없는 제안입니다.[/]")
+        raise typer.Exit(1)
+    f = proposals.work_order_path(pid)
+    if f.exists():
+        print(f.read_text(encoding="utf-8"))
+    else:
+        print(f"<!-- 아직 승인되지 않은 제안의 미리보기 ({STATUS_KO.get(p['status'], p['status'])}) -->")
+        print(proposals.work_order(p, proposals._manifest(p["project_id"])))
+
+
+@app.command()
+def usage(limit: int = typer.Option(15, help="최근 호출 개수")):
+    """LLM 사용량과 비용."""
+    cfg = load_config()
+    with Store() as st:
+        spent = st.month_spend()
+        calls = st.llm_calls(limit)
+    con.print(f"이번 달 ${spent:.4f} / 한도 ${cfg.llm.monthly_budget_usd:.2f} · 플래너 {cfg.llm.planner_model} · "
+              f"가격표 {pricing.meta()['as_of']}")
+    t = Table("시각(UTC)", "용도", "프로젝트", "모델", "입력", "캐시", "출력(추론)", "비용", "결과")
+    for c in calls:
+        t.add_row(c["ts"][5:16].replace("T", " "), c["purpose"], c["project_id"] or "", c["model"],
+                  f"{c['input_tokens']:,}", f"{c['cached_tokens']:,}",
+                  f"{c['output_tokens']:,} ({c['reasoning_tokens']:,})", f"${c['cost_usd']:.4f}",
+                  "성공" if c["ok"] else f"[red]{(c['error'] or '')[:40]}[/]")
+    con.print(t)
+
+
+@app.command()
+def bot():
+    """(launchd용) Telegram 버튼·명령을 처리하는 상시 봇."""
+    from .notify import bot as tg_bot
+
+    tg_bot.run_forever(log=lambda s: print(s, flush=True))
+
+
 # ---- secret ----
 @secret_app.command("set")
 def secret_set(name: str):
-    """비밀값을 키체인에 저장한다 (입력은 화면에 보이지 않음)."""
-    value = typer.prompt(f"{name} 값", hide_input=True)
-    secrets.put(name, value.strip())
+    """비밀값을 키체인에 저장한다 (입력은 화면에 보이지 않음). 알려진 키는 형식과 유효성을 확인한다."""
+    value = typer.prompt(f"{name} 값", hide_input=True).strip()
+    problem = secrets.format_problem(name, value)
+    if problem:
+        con.print(f"[yellow]{problem}[/]")
+        if not typer.confirm("그래도 저장할까요?", default=False):
+            raise typer.Exit(1)
+    secrets.put(name, value)
     con.print(f"[green]저장됨[/] {name}")
+    ok, msg = secrets.verify(name)
+    if ok is not None:
+        con.print(f"[green]확인됨[/] {msg}" if ok else f"[red]확인 실패[/] {msg}")
 
 
 @secret_app.command("list")

@@ -61,6 +61,7 @@ function ProjectCard({ p, onClick }: { p: ProjectSummary; onClick: () => void })
       <div className="card-meta">
         {p.counts.critical > 0 && <span className="cnt cnt-critical">위험 {p.counts.critical}</span>}
         {p.counts.warning > 0 && <span className="cnt cnt-warning">주의 {p.counts.warning}</span>}
+        {p.proposals_waiting > 0 && <span className="cnt cnt-proposal">제안 {p.proposals_waiting}</span>}
         {g?.is_git ? (
           <span className="meta-git" title={g.last_commit_msg}>
             {g.branch}

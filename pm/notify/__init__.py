@@ -14,6 +14,9 @@ from ..store import Store, now_iso
 from . import telegram
 
 ICON = {"red": "🔴", "yellow": "🟡", "green": "🟢", "gray": "⚪"}
+KIND = {"maintenance": "유지보수", "cost": "비용 절감", "feature": "기능", "experiment": "검증 실험"}
+RISK = {"low": "낮음", "medium": "중간", "high": "높음"}
+DECISION = {"approved": "✅ 승인됨", "rejected": "❌ 거절됨", "deferred": "⏸ 보류됨", "done": "🏁 완료"}
 SEV_ICON = {"critical": "🔴", "warning": "🟡", "info": "⚪"}
 MAX_ITEMS = 10
 
@@ -73,8 +76,77 @@ def format_digest(st: Store, manifests: list[Manifest], since: str | None, port:
         lines.append(f"지난 요약 이후: 새 문제 {len(opened)}건 · 해결 {len(ch['resolved'])}건")
         for f in opened[:5]:
             lines.append(f"  {SEV_ICON[f['severity']]} {esc(f['title'])}")
+    waiting = st.proposals(statuses=("proposed", "deferred"))
+    if waiting:
+        lines.append(f"\n💡 결정을 기다리는 제안 {len(waiting)}건")
     lines.append(f"\n대시보드: http://localhost:{port}")
     return "\n".join(lines)
+
+
+def proposal_text(p: dict, project_name: str) -> str:
+    """제안 카드. 결정된 제안이면 결과 줄이 붙는다."""
+    d = p["data"]
+    c = d["exec_cost"]
+    lines = [
+        f"💡 <b>[{esc(project_name)}] {esc(d['title'])}</b>",
+        f"{KIND.get(d['kind'], d['kind'])} · 규모 {d['size']} · 위험 {RISK.get(d['risk'], d['risk'])}"
+        f" · 우선순위 {d['priority']}" + (" · 보호 경로 포함" if d.get("touches_protected") else ""),
+        "",
+        esc(d["summary"]),
+    ]
+    if d.get("evidence"):
+        lines += ["", "<b>근거</b>", *[f"• {esc(e)}" for e in d["evidence"][:4]]]
+    lines += ["", f"<b>기대효과</b> {esc(d['expected_effect'])}"]
+    lines.append(f"💰 실행 비용(P2) ${c['low']:.2f}~{c['high']:.2f}, 상한 ${c['cap']:.2f} · {c['basis']}")
+    if d.get("over_task_budget"):
+        lines.append(f"⚠️ 프로젝트 작업당 예산 ${d['task_budget_usd']:.2f}을 넘음")
+    ops = d.get("ops_cost_change_usd_month")
+    if ops is not None:
+        sign = "+" if ops > 0 else ""
+        lines.append(f"📈 월 운영비 {sign}${ops:.2f} (LLM 추정: {esc(d.get('ops_cost_assumption') or '가정 없음')})")
+    if d.get("low_risk"):
+        lines.append("🟢 저위험 — P2 이후 사전 승인 예산 안에서 자동 처리 대상")
+    lines.append(f"<code>{p['id']}</code>")
+    if p["status"] in DECISION:
+        when = (p.get("decided_at") or "")[:16].replace("T", " ")
+        via = {"telegram": "Telegram", "dashboard": "대시보드", "cli": "CLI"}.get(p.get("decided_via") or "", "")
+        lines.append(f"\n<b>{DECISION[p['status']]}</b> {when} UTC {via}".rstrip())
+        if p.get("decision_note"):
+            lines.append(f"메모: {esc(p['decision_note'])}")
+        if p["status"] == "approved":
+            lines.append(f"작업 지시서: <code>pm task {p['id']}</code>")
+    return "\n".join(lines)
+
+
+def proposal_buttons(p: dict):
+    """열려 있는 제안에만 버튼을 단다. 보류된 제안은 승인·거절만."""
+    pid = p["id"]
+    if p["status"] in ("proposed", "backlog"):
+        return [[("✅ 승인", f"p:{pid}:approve"), ("⏸ 보류", f"p:{pid}:defer"), ("❌ 거절", f"p:{pid}:reject")]]
+    if p["status"] == "deferred":
+        return [[("✅ 승인", f"p:{pid}:approve"), ("❌ 거절", f"p:{pid}:reject")]]
+    return None
+
+
+def push_proposals(st: Store, manifests: list[Manifest], limit: int = 5) -> int:
+    """승인함(proposed)에 새로 올라온 제안을 버튼과 함께 보낸다."""
+    if not telegram.configured():
+        return 0
+    names = {m.id: m.name for m in manifests}
+    pending = [p for p in st.proposals(statuses=("proposed",)) if not p.get("tg_message_id")][:limit]
+    for p in pending:
+        mid = telegram.send(proposal_text(p, names.get(p["project_id"], p["project_id"])), proposal_buttons(p))
+        st.set_proposal_message(p["id"], mid)
+    return len(pending)
+
+
+def budget_alert(st: Store, message: str) -> None:
+    """월 예산 상한 알림은 한 달에 한 번만."""
+    month = datetime.now().strftime("%Y-%m")
+    if st.get_kv("budget_alert_month") == month or not telegram.configured():
+        return
+    telegram.send(f"💸 <b>LLM 월 예산 상한 도달</b>\n{esc(message)}\n이번 달 남은 기간에는 제안을 만들지 않습니다.")
+    st.set_kv("budget_alert_month", month)
 
 
 def maybe_digest(st: Store, manifests: list[Manifest], cfg: Config, force: bool = False) -> bool:

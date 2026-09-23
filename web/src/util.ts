@@ -38,6 +38,26 @@ export const AUTONOMY: Record<string, string> = {
   L3: '저위험 자동 머지',
 }
 
+export const KIND: Record<string, string> = {
+  maintenance: '유지보수',
+  cost: '비용 절감',
+  feature: '기능',
+  experiment: '검증 실험',
+}
+export const RISK: Record<string, string> = { low: '낮음', medium: '중간', high: '높음' }
+export const PSTATUS: Record<string, string> = {
+  proposed: '결정 대기',
+  backlog: '백로그',
+  deferred: '보류',
+  approved: '승인됨',
+  rejected: '거절됨',
+  done: '완료',
+}
+
+export function usd(n: number, digits = 2): string {
+  return `$${n.toFixed(digits)}`
+}
+
 export const VERIFY: Record<string, string> = {
   V0: '검증 수단 없음',
   V1: '일부 검증 (테스트 또는 헬스체크)',
@@ -51,6 +71,10 @@ const EVENT: Record<string, string> = {
   finding_acknowledged: '확인',
   finding_ignored: '무시',
   finding_open: '다시 열기',
+  proposal_created: '새 제안',
+  proposal_approved: '제안 승인',
+  proposal_rejected: '제안 거절',
+  proposal_deferred: '제안 보류',
 }
 
 export function eventLabel(type: string): string {

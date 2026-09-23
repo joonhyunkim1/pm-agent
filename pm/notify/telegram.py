@@ -13,6 +13,9 @@ TOKEN = "TELEGRAM_BOT_TOKEN"
 CHAT = "TELEGRAM_CHAT_ID"
 MAX_LEN = 4000  # Telegram 한도 4096자에서 여유를 둔다
 
+# [[("라벨", "콜백 데이터"), ...], ...] — 줄 단위 버튼 배치
+Buttons = list[list[tuple[str, str]]]
+
 
 class TelegramError(Exception):
     pass
@@ -22,12 +25,16 @@ def configured() -> bool:
     return bool(secrets.get(TOKEN) and secrets.get(CHAT))
 
 
-def _call(method: str, **params) -> dict:
+def chat_id() -> str | None:
+    return secrets.get(CHAT)
+
+
+def _call(method: str, http_timeout: float = 20, **params) -> dict:
     token = secrets.get(TOKEN)
     if not token:
         raise TelegramError(f"{TOKEN} 미설정")
     try:
-        r = httpx.post(f"https://api.telegram.org/bot{token}/{method}", json=params, timeout=20)
+        r = httpx.post(f"https://api.telegram.org/bot{token}/{method}", json=params, timeout=http_timeout)
         data = r.json()
     except (httpx.HTTPError, ValueError) as e:
         raise TelegramError(f"{method} 호출 실패: {type(e).__name__}") from None
@@ -36,13 +43,40 @@ def _call(method: str, **params) -> dict:
     return data
 
 
-def send(text: str) -> None:
-    chat = secrets.get(CHAT)
+def _markup(buttons: Buttons | None) -> dict:
+    if buttons is None:
+        return {"inline_keyboard": []}
+    return {"inline_keyboard": [[{"text": t, "callback_data": d} for t, d in row] for row in buttons]}
+
+
+def _fit(text: str) -> str:
+    return text if len(text) <= MAX_LEN else text[: MAX_LEN - 20] + "\n…(생략)"
+
+
+def send(text: str, buttons: Buttons | None = None) -> int:
+    chat = chat_id()
     if not chat:
         raise TelegramError(f"{CHAT} 미설정")
-    if len(text) > MAX_LEN:
-        text = text[: MAX_LEN - 20] + "\n…(생략)"
-    _call("sendMessage", chat_id=chat, text=text, parse_mode="HTML", disable_web_page_preview=True)
+    params = dict(chat_id=chat, text=_fit(text), parse_mode="HTML", disable_web_page_preview=True)
+    if buttons:
+        params["reply_markup"] = _markup(buttons)
+    return _call("sendMessage", **params)["result"]["message_id"]
+
+
+def edit(message_id: int, text: str, buttons: Buttons | None = None) -> None:
+    _call("editMessageText", chat_id=chat_id(), message_id=message_id, text=_fit(text), parse_mode="HTML",
+          disable_web_page_preview=True, reply_markup=_markup(buttons))
+
+
+def answer_callback(callback_id: str, text: str = "") -> None:
+    _call("answerCallbackQuery", callback_query_id=callback_id, text=text[:190])
+
+
+def get_updates(offset: int | None, timeout: int = 50) -> list[dict]:
+    params: dict = {"timeout": timeout, "allowed_updates": ["message", "callback_query"]}
+    if offset is not None:
+        params["offset"] = offset
+    return _call("getUpdates", http_timeout=timeout + 20, **params)["result"]
 
 
 def bot_name() -> str:
