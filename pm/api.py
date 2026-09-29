@@ -7,10 +7,11 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
+from urllib.parse import urlparse
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -25,6 +26,27 @@ WEB_DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
 app = FastAPI(title="pm-agent", docs_url="/api/docs", openapi_url="/api/openapi.json")
 # DNS rebinding 방지: 로컬 호스트 이름으로 들어온 요청만 받는다
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1"])
+
+LOCAL_HOSTS = ("localhost", "127.0.0.1")
+CSRF_HEADER = "x-pm-agent"
+
+
+@app.middleware("http")
+async def block_cross_site(request: Request, call_next):
+    """다른 웹사이트가 내 브라우저를 통해 상태를 바꾸는 요청(스캔·LLM 계획·승인)을 보내지 못하게 한다.
+
+    - Origin이 로컬이 아닌 요청은 거부한다.
+    - 상태를 바꾸는 요청에는 대시보드가 붙이는 전용 헤더를 요구한다. 브라우저는 다른 출처가
+      임의의 헤더를 붙이려 하면 사전 요청(preflight)을 보내는데, CORS를 열어 두지 않았으므로 막힌다.
+    """
+    if request.method not in ("GET", "HEAD", "OPTIONS") and request.url.path.startswith("/api/"):
+        origin = request.headers.get("origin")
+        if origin and urlparse(origin).hostname not in LOCAL_HOSTS:
+            return JSONResponse({"detail": "다른 사이트에서 온 요청은 받지 않는다"}, status_code=403)
+        if request.headers.get(CSRF_HEADER) != "1":
+            return JSONResponse({"detail": f"대시보드에서 보낸 요청만 받는다 ({CSRF_HEADER} 헤더 필요)"},
+                                status_code=403)
+    return await call_next(request)
 
 _scan_error: dict = {}
 _plan_state: dict = {}

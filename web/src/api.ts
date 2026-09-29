@@ -193,7 +193,8 @@ export interface ProjectDetail {
 async function j<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(url, {
     ...init,
-    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
+    // X-PM-Agent: 다른 사이트가 흉내 낼 수 없는 헤더. 서버가 상태를 바꾸는 요청에 요구한다.
+    headers: { 'Content-Type': 'application/json', 'X-PM-Agent': '1', ...(init?.headers ?? {}) },
   })
   if (!r.ok) {
     let msg = `HTTP ${r.status}`
