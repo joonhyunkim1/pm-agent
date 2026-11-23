@@ -63,11 +63,14 @@ def init(
 def list_():
     """등록된 프로젝트 목록."""
     manifests, errors = mf.load_all()
-    t = Table("id", "이름", "단계", "스택", "자율", "검증", "경로")
+    t = Table("id", "이름", "단계", "스택", "자율", "검증", "상태", "경로")
     for m in manifests:
+        state = f"[yellow]⏸ 일시정지[/] {m.paused_at[:10]}" if m.paused else "관리 중"
         t.add_row(m.id, m.name, m.stage, ",".join(m.stack), f"{m.autonomy}→{m.effective_autonomy}",
-                  m.verification_level, m.path)
+                  m.verification_level, state, m.path)
     con.print(t)
+    if load_config().llm.paused:
+        con.print("[yellow]⏸ 제안(LLM) 일시정지 중[/] — `pm resume --llm`")
     for e in errors:
         con.print(f"[red]매니페스트 오류[/] {e}")
 
@@ -186,6 +189,9 @@ def plan(
     if not llm.configured():
         con.print(f"[red]{llm.KEY} 미설정 — `pm secret set {llm.KEY}`[/]")
         raise typer.Exit(1)
+    if load_config().llm.paused:
+        con.print("[yellow]제안(LLM)이 일시정지 상태입니다 — `pm resume --llm`[/]")
+        raise typer.Exit(1)
     if not yes:
         typer.confirm(f"예상 ${est['typical_usd']:.4f} (최대 ${est['worst_usd']:.4f}) — 실행할까요?", abort=True)
     try:
@@ -284,6 +290,56 @@ def bot():
     from .notify import bot as tg_bot
 
     tg_bot.run_forever(log=lambda s: print(s, flush=True))
+
+
+# ---- 일시정지 ----
+def _set_paused(ids: list[str], paused: bool, reason: str) -> None:
+    from .store import now_iso
+
+    known = {m.id: m for m in mf.load_all()[0]}
+    for pid in ids:
+        m = known.get(pid)
+        if not m:
+            con.print(f"[red]없는 프로젝트: {pid}[/] (`pm list`로 id 확인)")
+            continue
+        m.paused_at = now_iso() if paused else None
+        m.paused_reason = reason if paused else ""
+        mf.save(m)
+        with Store() as st:
+            st.event("project_paused" if paused else "project_resumed", m.id, reason=reason)
+        con.print(f"{'⏸ 일시정지' if paused else '▶ 재개'}: {m.name}")
+
+
+def _set_llm_paused(paused: bool) -> None:
+    from .config import save_config
+
+    cfg = load_config()
+    cfg.llm.paused = paused
+    save_config(cfg)
+    con.print(f"{'⏸' if paused else '▶'} 제안(LLM) {'일시정지' if paused else '재개'}")
+
+
+@app.command()
+def pause(
+    project: list[str] = typer.Argument(None, help="일시정지할 프로젝트 id (여러 개 가능)"),
+    reason: str = typer.Option("", "--reason", "-r", help="사유 (대시보드·요약에 표시)"),
+    llm_: bool = typer.Option(False, "--llm", help="pm-agent 자신의 제안(LLM 호출)을 멈춘다"),
+):
+    """프로젝트의 스캔·경보·제안을 멈춘다. 외부 서비스(Actions·Vercel)는 따로 멈춰야 한다."""
+    if llm_:
+        _set_llm_paused(True)
+    _set_paused(project or [], True, reason)
+
+
+@app.command()
+def resume(
+    project: list[str] = typer.Argument(None, help="다시 관리할 프로젝트 id"),
+    llm_: bool = typer.Option(False, "--llm", help="pm-agent 자신의 제안(LLM 호출)을 다시 켠다"),
+):
+    """일시정지를 푼다. 다음 스캔부터 다시 점검한다."""
+    if llm_:
+        _set_llm_paused(False)
+    _set_paused(project or [], False, "")
 
 
 # ---- secret ----

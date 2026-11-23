@@ -7,6 +7,7 @@ const HEALTH_LABEL: Record<Health, string> = {
   yellow: '주의',
   green: '정상',
   gray: '아직 스캔 안 함',
+  paused: '일시정지',
 }
 
 export function HealthDot({ health }: { health: Health }) {

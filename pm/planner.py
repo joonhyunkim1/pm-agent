@@ -223,9 +223,13 @@ def build_context(m: mf.Manifest, st: Store, cfg: Config) -> tuple[str, str, dic
 # ---------- 계획 ----------
 
 def _targets(manifests: list[mf.Manifest], only: list[str] | None) -> list[mf.Manifest]:
-    # L0(관찰만)과 아이디어 단계는 제안 대상이 아니다
+    # L0(관찰만), 아이디어 단계, 일시정지한 프로젝트는 제안 대상이 아니다
     return [m for m in manifests
-            if m.autonomy != "L0" and m.stage != "idea" and (not only or m.id in only)]
+            if m.autonomy != "L0" and m.stage != "idea" and not m.paused and (not only or m.id in only)]
+
+
+class LlmPaused(Exception):
+    pass
 
 
 def _norm(title: str) -> str:
@@ -282,6 +286,8 @@ def estimate(only: list[str] | None = None, force: bool = False) -> dict:
 def plan(trigger: str = "manual", only: list[str] | None = None, force: bool = False,
          backend: llm.Backend | None = None, notify_: bool = True, log=lambda s: None) -> dict:
     cfg = load_config()
+    if cfg.llm.paused:
+        raise LlmPaused("제안(LLM)이 일시정지 상태 — `pm resume --llm`으로 다시 켠다")
     manifests, _ = mf.load_all()
     report: dict = {"trigger": trigger, "projects": {}, "cost_usd": 0.0}
     drafts: list[tuple[mf.Manifest, ProposalDraft, dict[str, str]]] = []

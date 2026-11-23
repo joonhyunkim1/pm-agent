@@ -68,7 +68,9 @@ def _summary(m: mf.Manifest, active: list[dict], results: list[dict], waiting: i
         "autonomy": m.autonomy,
         "effective_autonomy": m.effective_autonomy,
         "verification": m.verification_level,
-        "health": notify.project_health(active) if results else "gray",
+        "health": "paused" if m.paused else (notify.project_health(active) if results else "gray"),
+        "paused_at": m.paused_at,
+        "paused_reason": m.paused_reason,
         "counts": counts,
         "unacked": sum(1 for f in active if f["status"] == "open" and f["severity"] != "info"),
         "top": top,
@@ -118,6 +120,7 @@ def _llm_summary(st: Store, cfg) -> dict:
         "budget": cfg.llm.monthly_budget_usd,
         "last_plan_at": st.get_kv("last_plan_at"),
         "planning": scanner.is_scanning("plan"),
+        "paused": cfg.llm.paused,
         "plan_error": _plan_state.get("error"),
         "last_plan": _plan_state.get("report"),
         "pricing": pricing.meta(),
@@ -267,6 +270,8 @@ def start_plan(body: PlanBody | None = None) -> dict:
         raise HTTPException(409, "이미 계획 중")
     if not llm.configured():
         raise HTTPException(400, f"{llm.KEY} 미설정 — 터미널에서 `pm secret set {llm.KEY}`")
+    if load_config().llm.paused:
+        raise HTTPException(409, "제안(LLM)이 일시정지 상태 — 터미널에서 `pm resume --llm`")
     body = body or PlanBody()
 
     def work():

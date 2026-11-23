@@ -53,7 +53,11 @@ function ProjectCard({ p, onClick }: { p: ProjectSummary; onClick: () => void })
         <AutonomyBadge p={p} />
       </div>
       {p.goal && <div className="card-goal">{p.goal}</div>}
-      {p.top ? (
+      {p.paused_at ? (
+        <div className="card-paused-note">
+          ⏸ 일시정지{p.paused_reason ? ` — ${p.paused_reason}` : ''} ({timeAgo(p.paused_at)})
+        </div>
+      ) : p.top ? (
         <div className={`card-issue sev-${p.top.severity}`}>{p.top.title}</div>
       ) : p.health === 'green' ? (
         <div className="card-ok">열린 문제 없음</div>

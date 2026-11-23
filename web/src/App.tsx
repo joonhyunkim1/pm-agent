@@ -99,6 +99,7 @@ export function App() {
             <i />
           </span>
           <span className="brand-name">PM Agent</span>
+          {ov?.llm.paused && <span className="mode mode-paused">⏸ 제안 일시정지</span>}
           {ov && (
             <span className="mode" title={`${ov.llm.planner_model} · 가격표 ${ov.llm.pricing.as_of} ${ov.llm.pricing.tier}`}>
               이번 달 LLM {usd(ov.llm.month_spend)} / {usd(ov.llm.budget, 0)}

@@ -1392,3 +1392,26 @@ button.stat:hover {
     height: 100%;
   }
 }
+
+/* ---------- 일시정지 ---------- */
+.dot-paused {
+  background: none;
+  border: 2px solid var(--gray-dot);
+  width: 10px;
+  height: 10px;
+}
+.card-paused {
+  border-left-color: var(--gray-dot);
+  opacity: 0.75;
+}
+.card-paused-note {
+  font-size: 12.5px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+.mode-paused {
+  color: var(--amber);
+  border-color: var(--amber);
+}

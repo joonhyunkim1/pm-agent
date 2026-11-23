@@ -1,5 +1,5 @@
 export type Severity = 'critical' | 'warning' | 'info'
-export type Health = 'red' | 'yellow' | 'green' | 'gray'
+export type Health = 'red' | 'yellow' | 'green' | 'gray' | 'paused'
 export type FindingStatus = 'open' | 'acknowledged' | 'ignored' | 'resolved'
 export type CheckStatus = 'ok' | 'warn' | 'fail' | 'error' | 'skipped'
 
@@ -46,6 +46,8 @@ export interface ProjectSummary {
   git: GitInfo | null
   last_checked: string | null
   proposals_waiting: number
+  paused_at: string | null
+  paused_reason: string
 }
 
 export type ProposalStatus = 'proposed' | 'backlog' | 'deferred' | 'approved' | 'rejected' | 'done'
@@ -93,6 +95,7 @@ export interface LlmSummary {
   budget: number
   last_plan_at: string | null
   planning: boolean
+  paused: boolean
   plan_error: string | null
   pricing: { source: string; as_of: string; tier: string; unit: string }
 }

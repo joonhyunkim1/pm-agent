@@ -89,6 +89,13 @@ class Manifest(BaseModel):
     exclude: list[str] = []
     disabled_checks: list[str] = []
     notes: str = ""
+    # 일시정지: 스캔·경보·제안을 모두 멈추고 마지막 상태만 보여 준다 (`pm pause` / `pm resume`)
+    paused_at: str | None = None
+    paused_reason: str = ""
+
+    @property
+    def paused(self) -> bool:
+        return self.paused_at is not None
 
     @field_validator("verify", mode="before")
     @classmethod

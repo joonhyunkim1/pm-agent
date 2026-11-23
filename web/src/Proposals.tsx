@@ -128,10 +128,15 @@ function PlanBar({ ov, onChanged }: { ov: Overview; onChanged: () => void }) {
             <span style={{ width: `${ratio * 100}%` }} className={ratio > 0.8 ? 'hot' : ''} />
           </div>
         </div>
-        <button className="btn primary" disabled={busy || l.planning || !l.configured} onClick={() => preview(false)}>
+        <button className="btn primary" disabled={busy || l.planning || !l.configured || l.paused} onClick={() => preview(false)}>
           {l.planning ? '제안 만드는 중…' : '지금 제안 받기'}
         </button>
       </div>
+      {l.paused && (
+        <div className="notice notice-amber">
+          제안(LLM)이 일시정지 상태입니다. 다시 켜려면 터미널에서 <code>pm resume --llm</code>
+        </div>
+      )}
       {!l.configured && (
         <div className="notice notice-amber">
           OpenAI 키가 없습니다. 터미널에서 <code>pm secret set OPENAI_API_KEY</code>

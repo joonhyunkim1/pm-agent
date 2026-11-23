@@ -48,7 +48,8 @@ def push_alerts(st: Store, manifests: list[Manifest], cfg: Config) -> int:
     """아직 알리지 않은 open critical을 보낸다. 전송에 성공한 것만 '알림 완료'로 표시한다."""
     if not telegram.configured():
         return 0
-    rows = st.unnotified("critical")
+    paused = {m.id for m in manifests if m.paused}
+    rows = [r for r in st.unnotified("critical") if r["project_id"] not in paused]
     if not rows:
         return 0
     names = {m.id: m.name for m in manifests}
@@ -61,6 +62,9 @@ def format_digest(st: Store, manifests: list[Manifest], since: str | None, port:
     today = datetime.now().strftime("%m-%d")
     lines = [f"<b>📋 프로젝트 점검 요약 ({today})</b>", ""]
     for m in manifests:
+        if m.paused:
+            lines.append(f"⏸ <b>{esc(m.name)}</b> — 일시정지" + (f" ({esc(m.paused_reason)})" if m.paused_reason else ""))
+            continue
         active = st.findings(m.id, ("open", "acknowledged"))
         health = project_health(active)
         top = next((f for f in active if f["severity"] in ("critical", "warning")), None)

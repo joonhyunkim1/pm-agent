@@ -100,6 +100,10 @@ def scan(trigger: str = "manual", only: list[str] | None = None, notify_: bool =
         log(f"매니페스트 오류: {e}")
     if only:
         manifests = [m for m in manifests if m.id in only]
+    for m in manifests:
+        if m.paused:
+            log(f"  [{m.name}] 일시정지 중 — 건너뜀 ({m.paused_reason or m.paused_at[:10]})")
+    manifests = [m for m in manifests if not m.paused]
 
     with scan_lock(), Store() as st:
         run_id = st.start_run(trigger)
@@ -170,7 +174,9 @@ def tick(log: Log = print) -> None:
 
     with Store() as st:
         due_plan = planner.plan_due(st, cfg)
-    if due_plan and llm.configured():
+    if due_plan and cfg.llm.paused:
+        log("제안(LLM) 일시정지 중 — 계획 건너뜀")
+    elif due_plan and llm.configured():
         try:
             r = planner.plan("schedule", log=log)
             log(f"계획 완료: 새 제안 {sum(r['created'].values())}개, 비용 ${r['cost_usd']:.4f}, "

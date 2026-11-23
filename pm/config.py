@@ -27,6 +27,8 @@ class LlmConfig(BaseModel):
     # P2 실행기(코딩 에이전트)가 쓸 모델. 제안 카드의 실행 비용 추정에 쓴다.
     executor_model: str = "gpt-5.3-codex"
     monthly_budget_usd: float = 10.0
+    # True면 제안(LLM 호출)을 만들지 않는다. 무료 스캔·알림은 계속한다. (`pm pause --llm`)
+    paused: bool = False
     plan_interval_hours: float = 48
     max_proposals_per_project: int = 3
     max_proposals_per_run: int = 5
